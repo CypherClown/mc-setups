@@ -1,0 +1,112 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-02-01T00:00:00+00:00",
+    "name": "MCSetups Installer",
+    "author": "support@hxdev.org",
+    "description": "Egg for installing MCSetups from a remote store.",
+    "features": null,
+    "docker_images": {
+        "Alpine": "ghcr.io/pterodactyl/yolks:alpine"
+    },
+    "file_denylist": [],
+    "startup": "echo \"Starting MCSetups Installation...\"",
+    "config": {
+        "files": "{}",
+        "startup": "{}",
+        "logs": "{}",
+        "stop": "^^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "set -o pipefail\n\nmkdir -p /mnt/server\ncd /mnt/server\n\necho \"[MCSetups Installer] Preparing environment...\"\necho \"[MCSetups Installer] Updating package list...\"\napt-get update > /dev/null 2>&1\necho \"[MCSetups Installer] Installing required packages (curl, unzip, jq)...\"\napt-get install -y curl unzip jq > /dev/null 2>&1\necho \"[MCSetups Installer] Packages installed successfully\"\n\nSTORE_URL=$MCSETUPS_STORE_URL\nLICENSE_KEY=$MCSETUPS_LICENSE_KEY\nFILE_ID=$MCSETUPS_FILE_ID\nPLACEHOLDER_VALUES=$MCSETUPS_PLACEHOLDER_VALUES\nADDON_IDS=$MCSETUPS_ADDON_IDS\nWIPE_DATA=$MCSETUPS_WIPE_DATA\nZIP_AND_WIPE=$MCSETUPS_ZIP_AND_WIPE\n\nlog_message() {\n    echo \"[MCSetups Installer] $1\"\n}\n\nlog_message \"========================================\"\nlog_message \"Starting MCSetups installation process\"\nlog_message \"========================================\"\n\nif [ \"$ZIP_AND_WIPE\" = \"true\" ]; then\n    log_message \"Step 1/6: Archiving existing server data...\"\n    SERVER_NAME=$(basename \"$(pwd)\")\n    zip -r \"${SERVER_NAME}.zip\" ./* ./.??* 2>/dev/null || true\n    log_message \"Archive created: ${SERVER_NAME}.zip\"\n    log_message \"Step 2/6: Deleting existing server data after archiving...\"\n    find . -mindepth 1 -not -name \"${SERVER_NAME}.zip\" -delete\n    log_message \"Existing data deleted\"\nelif [ \"$WIPE_DATA\" = \"true\" ]; then\n    log_message \"Step 1/6: Wiping existing server data...\"\n    find . -mindepth 1 -delete\n    log_message \"Existing data wiped\"\nelse\n    log_message \"Step 1/6: Skipping data wipe (wipe_data=false)\"\nfi\n\nlog_message \"Step 2/6: Preparing download request...\"\nBASE_URL=$(echo \"$STORE_URL\" | sed 's|/$||')\nDOWNLOAD_URL=\"${BASE_URL}/store/download/${FILE_ID}\"\n\nlog_message \"Store URL: $BASE_URL\"\nlog_message \"File ID: $FILE_ID\"\n\nPAYLOAD_FILE=$(mktemp)\nlog_message \"Constructing JSON payload...\"\n\nif ! echo \"$PLACEHOLDER_VALUES\" | jq empty 2>/dev/null; then\n    log_message \"WARNING: Invalid JSON in PLACEHOLDER_VALUES, using empty object\"\n    PLACEHOLDER_VALUES='{}'\nfi\n\n# Validate addon_ids JSON\nif ! echo \"$ADDON_IDS\" | jq empty 2>/dev/null; then\n    log_message \"WARNING: Invalid JSON in ADDON_IDS, using empty array\"\n    ADDON_IDS='[]'\nfi\n\n# Log placeholder values for debugging (without sensitive data)\nPLACEHOLDER_COUNT=$(echo \"$PLACEHOLDER_VALUES\" | jq 'length' 2>/dev/null || echo 0)\nlog_message \"Placeholder values count: $PLACEHOLDER_COUNT\"\nif [ \"$PLACEHOLDER_COUNT\" -gt 0 ]; then\n    log_message \"Placeholder keys: $(echo \"$PLACEHOLDER_VALUES\" | jq -r 'keys | join(\", \")' 2>/dev/null || echo 'unknown')\"\nfi\n\nADDON_COUNT=$(echo \"$ADDON_IDS\" | jq 'length' 2>/dev/null || echo 0)\nlog_message \"Addon IDs count: $ADDON_COUNT\"\n\n# Construct payload using --argjson for proper JSON parsing\njq -n -c --arg license_key \"$LICENSE_KEY\" --argjson placeholder_values \"$PLACEHOLDER_VALUES\" --argjson addon_ids \"$ADDON_IDS\" '{license_key: $license_key, placeholder_values: $placeholder_values, addon_ids: $addon_ids}' > \"$PAYLOAD_FILE\"\n\nif [ $? -ne 0 ]; then\n    log_message \"ERROR: Failed to construct JSON payload\"\n    log_message \"Placeholder Values (raw): $PLACEHOLDER_VALUES\"\n    log_message \"Addon IDs (raw): $ADDON_IDS\"\n    rm -f \"$PAYLOAD_FILE\"\n    exit 1\nfi\n\nlog_message \"Payload constructed successfully\"\nlog_message \"Payload preview: $(cat \"$PAYLOAD_FILE\" | jq -c '{license_key: .license_key, placeholder_count: (.placeholder_values | length), addon_count: (.addon_ids | length)}' 2>/dev/null || echo 'unable to parse')\"\n\nlog_message \"Step 3/6: Downloading setup from store...\"\nlog_message \"Download URL: $DOWNLOAD_URL\"\nlog_message \"This may take a few minutes depending on file size...\"\n\nHTTP_CODE_FILE=$(mktemp)\nCURL_EXIT=0\ncurl -X POST \\\n     -H \"Content-Type: application/json\" \\\n     -H \"X-License-Key: $LICENSE_KEY\" \\\n     -d \"@$PAYLOAD_FILE\" \\\n     \"$DOWNLOAD_URL\" \\\n     -o setup.zip \\\n     -w \"\\nHTTP_CODE:%{http_code}\" \\\n     --progress-bar \\\n     --show-error 2>&1 | tee \"$HTTP_CODE_FILE\" || CURL_EXIT=$?\n\nHTTP_CODE=$(grep -o 'HTTP_CODE:[0-9][0-9][0-9]' \"$HTTP_CODE_FILE\" | cut -d: -f2 || echo \"000\")\nrm -f \"$HTTP_CODE_FILE\"\n\nif [ $CURL_EXIT -ne 0 ]; then\n    log_message \"ERROR: curl failed with exit code $CURL_EXIT\"\n    if [ -f setup.zip ]; then\n        rm -f setup.zip\n    fi\n    exit 1\nfi\n\nrm -f \"$PAYLOAD_FILE\"\n\nif [ \"$HTTP_CODE\" != \"200\" ]; then\n    log_message \"ERROR: HTTP $HTTP_CODE received from download endpoint\"\n    if [ -f setup.zip ]; then\n        log_message \"Response content (first 500 chars):\"\n        head -c 500 setup.zip\necho \"\"\n        rm -f setup.zip\n    fi\n    exit 1\nfi\n\nlog_message \"Download completed successfully (HTTP $HTTP_CODE)\"\n\nif [ ! -f setup.zip ]; then\n    log_message \"ERROR: setup.zip file not found after download.\"\n    exit 1\nfi\n\nZIP_SIZE=$(stat -c%s setup.zip 2>/dev/null || stat -f%z setup.zip 2>/dev/null || echo 0)\nif [ \"$ZIP_SIZE\" -eq 0 ]; then\n    log_message \"ERROR: Downloaded file is empty.\"\n    exit 1\nfi\n\nlog_message \"Downloaded file size: $(numfmt --to=iec-i --suffix=B $ZIP_SIZE 2>/dev/null || echo \"${ZIP_SIZE} bytes\")\"\n\nlog_message \"Step 4/6: Extracting setup.zip...\"\nlog_message \"Extracting files (this may take a moment)...\"\nunzip -o setup.zip 2>&1 | while read line; do\n    echo \"[MCSetups Installer] $line\"\ndone\nUNZIP_EXIT=${PIPESTATUS[0]}\n\nif [ $UNZIP_EXIT -ne 0 ]; then\n    log_message \"ERROR: Failed to extract setup.zip (exit code: $UNZIP_EXIT).\"\n    exit 1\nfi\n\nlog_message \"Extraction completed successfully\"\n\nlog_message \"Step 5/6: Checking extracted files...\"\nEXTRACTED_COUNT=$(find . -mindepth 1 -maxdepth 1 ! -name setup.zip | wc -l)\nlog_message \"Found $EXTRACTED_COUNT items in root directory\"\n\nTOP_LEVEL_DIRS=$(find . -mindepth 1 -maxdepth 1 -type d ! -name \"\\.*\")\nif [ -n \"$TOP_LEVEL_DIRS\" ]; then\n    DIR_COUNT=$(echo \"$TOP_LEVEL_DIRS\" | wc -l)\n    if [ \"$DIR_COUNT\" -eq 1 ]; then\n        TOP_DIR=$(echo \"$TOP_LEVEL_DIRS\" | head -1 | sed 's|^./||')\n        log_message \"Moving files from $TOP_DIR/ to root...\"\n        mv \"$TOP_DIR\"/* . 2>/dev/null || true\n        mv \"$TOP_DIR\"/.* . 2>/dev/null || true\n        rmdir \"$TOP_DIR\" 2>/dev/null || true\n        log_message \"Files moved successfully\"\n    else\n        log_message \"Multiple top-level directories found, keeping structure as-is\"\n    fi\nfi\n\n\nlog_message \"Step 5.5/6: Installing addons...\"\nADDON_DETAILS=$MCSETUPS_ADDON_DETAILS\n\nif [ -n \"$ADDON_DETAILS\" ] && [ \"$ADDON_DETAILS\" != \"[]\" ] && [ \"$ADDON_DETAILS\" != \"null\" ]; then\n    ADDON_COUNT=$(echo \"$ADDON_DETAILS\" | jq 'length' 2>/dev/null || echo 0)\n    log_message \"Installing $ADDON_COUNT addon(s)...\"\n    \n    if [ \"$ADDON_COUNT\" -gt 0 ]; then\n        for i in $(seq 0 $((ADDON_COUNT - 1))); do\n            ADDON_ID=$(echo \"$ADDON_DETAILS\" | jq -r \".[$i].id\" 2>/dev/null)\n            FILE_LOCATION=$(echo \"$ADDON_DETAILS\" | jq -r \".[$i].file_location // \\\"/\\\"\" 2>/dev/null)\n            \n            if [ -z \"$ADDON_ID\" ] || [ \"$ADDON_ID\" = \"null\" ]; then\n                continue\n            fi\n            \n            FILE_LOCATION_CLEAN=$(echo \"$FILE_LOCATION\" | sed 's|^/||' | sed 's|/$||')\n            \n            if [ -z \"$FILE_LOCATION_CLEAN\" ] || [ \"$FILE_LOCATION_CLEAN\" = \"/\" ]; then\n                TARGET_DIR=\".\"\n            elif [ \"$FILE_LOCATION_CLEAN\" = \"plugins\" ]; then\n                TARGET_DIR=\"./plugins\"\n            elif [ \"$FILE_LOCATION_CLEAN\" = \"config\" ]; then\n                TARGET_DIR=\"./config\"\n            elif [ \"$FILE_LOCATION_CLEAN\" = \"mods\" ]; then\n                TARGET_DIR=\"./mods\"\n            else\n                TARGET_DIR=\"./$FILE_LOCATION_CLEAN\"\n            fi\n            \n            log_message \"Downloading addon ID $ADDON_ID to $TARGET_DIR...\"\n            \n            mkdir -p \"$TARGET_DIR\"\n            \n            ADDON_DOWNLOAD_URL=\"${BASE_URL}/store/addons/${ADDON_ID}/download\"\n            ADDON_TEMP_FILE=$(mktemp)\n            \n            HTTP_CODE_FILE=$(mktemp)\n            CURL_EXIT=0\n            curl -X GET \\\n                 -H \"X-License-Key: $LICENSE_KEY\" \\\n                 \"$ADDON_DOWNLOAD_URL\" \\\n                 -o \"$ADDON_TEMP_FILE\" \\\n                 -w \"\\nHTTP_CODE:%{http_code}\" \\\n                 --progress-bar \\\n                 --show-error 2>&1 | tee \"$HTTP_CODE_FILE\" || CURL_EXIT=$?\n            \n            HTTP_CODE=$(grep -o 'HTTP_CODE:[0-9][0-9][0-9]' \"$HTTP_CODE_FILE\" | cut -d: -f2 || echo \"000\")\n            rm -f \"$HTTP_CODE_FILE\"\n            \n            if [ $CURL_EXIT -ne 0 ] || [ \"$HTTP_CODE\" != \"200\" ]; then\n                log_message \"WARNING: Failed to download addon $ADDON_ID (HTTP $HTTP_CODE)\"\n                rm -f \"$ADDON_TEMP_FILE\"\n                continue\n            fi\n            \n            if unzip -t \"$ADDON_TEMP_FILE\" > /dev/null 2>&1; then\n                log_message \"Extracting addon $ADDON_ID to $TARGET_DIR...\"\n                unzip -o \"$ADDON_TEMP_FILE\" -d \"$TARGET_DIR\" > /dev/null 2>&1\n                UNZIP_EXIT=$?\n                if [ $UNZIP_EXIT -ne 0 ]; then\n                    log_message \"WARNING: Failed to extract addon $ADDON_ID\"\n                else\n                    log_message \"Addon $ADDON_ID installed successfully to $TARGET_DIR\"\n                fi\n            else\n                ADDON_FILENAME=$(basename \"$ADDON_TEMP_FILE\")\n                mv \"$ADDON_TEMP_FILE\" \"$TARGET_DIR/\" 2>/dev/null || true\n                log_message \"Addon $ADDON_ID installed successfully to $TARGET_DIR\"\n            fi\n            \n            rm -f \"$ADDON_TEMP_FILE\"\n        done\n        log_message \"Addon installation completed\"\n    fi\nelse\n    log_message \"No addons to install\"\nfi\nlog_message \"Step 6/6: Cleaning up temporary files...\"\nrm -f setup.zip\nlog_message \"Cleanup completed\"\n\nlog_message \"========================================\"\nlog_message \"MCSetups installation completed successfully!\"\nlog_message \"========================================\"\n",
+            "container": "ghcr.io/pterodactyl/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Store URL",
+            "description": "URL of the MCSetups store",
+            "env_variable": "MCSETUPS_STORE_URL",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "License Key",
+            "description": "License key for MCSetups",
+            "env_variable": "MCSETUPS_LICENSE_KEY",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "File ID",
+            "description": "ID of the setup file to install (numeric e.g. 1, or client product e.g. client-1)",
+            "env_variable": "MCSETUPS_FILE_ID",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Placeholder Values",
+            "description": "JSON string of placeholder values",
+            "env_variable": "MCSETUPS_PLACEHOLDER_VALUES",
+            "default_value": "{}",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Addon IDs",
+            "description": "JSON string of addon IDs to include",
+            "env_variable": "MCSETUPS_ADDON_IDS",
+            "default_value": "[]",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Wipe Data",
+            "description": "Whether to wipe existing server data",
+            "env_variable": "MCSETUPS_WIPE_DATA",
+            "default_value": "false",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Zip and Wipe",
+            "description": "Whether to zip and wipe existing server data",
+            "env_variable": "MCSETUPS_ZIP_AND_WIPE",
+            "default_value": "false",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Addon Details",
+            "description": "JSON string of addon details with file locations",
+            "env_variable": "MCSETUPS_ADDON_DETAILS",
+            "default_value": "[]",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        }
+    ]
+}
