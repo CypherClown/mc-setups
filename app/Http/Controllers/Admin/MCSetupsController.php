@@ -633,8 +633,18 @@ class MCSetupsController extends Controller
         try {
             $http = Http::timeout(300)
                 ->withHeaders(['X-License-Key' => $licenseKey, 'Accept' => 'application/json']);
+
             foreach ($request->allFiles() as $key => $file) {
-                $http = $http->attach($key, file_get_contents($file->getRealPath()), $file->getClientOriginalName());
+                if ($key !== 'file') {
+                    continue;
+                }
+
+                $stream = fopen($file->getRealPath(), 'r');
+                if ($stream === false) {
+                    continue;
+                }
+
+                $http = $http->attach($key, $stream, $file->getClientOriginalName());
             }
             $params = $request->except(array_keys($request->allFiles())) ?: [];
             unset($params['_token']);
@@ -653,10 +663,6 @@ class MCSetupsController extends Controller
 
     public function uploadProduct(Request $request): RedirectResponse|\Illuminate\Http\JsonResponse
     {
-        // #region agent log
-        $debugLog = base_path('.cursor/debug-918ad3.log');
-        file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:entry', 'message' => 'uploadProduct request received', 'data' => ['has_product_file' => $request->hasFile('product_file'), 'has_cover' => $request->hasFile('cover_image')], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-        // #endregion
         set_time_limit(300);
         $license = MCSetupsLicense::firstOrFail();
         if (!$license->hasS3Config()) {
@@ -696,9 +702,6 @@ class MCSetupsController extends Controller
 
         $file = $request->file('product_file');
         $displayName = trim((string) $validated['display_name']);
-        // #region agent log
-        file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:validated', 'message' => 'validation done', 'data' => ['display_name' => $displayName, 'file_size_kb' => (int) round($file->getSize() / 1024), 'has_cover' => $request->hasFile('cover_image')], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-        // #endregion
         $ext = $file->getClientOriginalExtension() ?: 'zip';
         $safeName = preg_replace('/[^a-zA-Z0-9._-]/', '_', $displayName) . '_' . time() . '.' . $ext;
         $path = 'mcsetups-addons/products/' . $safeName;
@@ -706,13 +709,7 @@ class MCSetupsController extends Controller
 
         $coverUrl = null;
         if ($request->hasFile('cover_image')) {
-            // #region agent log
-            file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:cover_start', 'message' => 'uploading cover image to S3', 'data' => [], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-            // #endregion
             $coverUrl = $this->s3Service->uploadCoverImage($license, $request->file('cover_image'), 'products', $base);
-            // #region agent log
-            file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:cover_done', 'message' => 'cover image uploaded', 'data' => ['url' => $coverUrl], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-            // #endregion
         }
 
         $meta = [
@@ -751,13 +748,7 @@ class MCSetupsController extends Controller
 
         try {
             $disk = $this->s3Service->getDisk($license);
-            // #region agent log
-            file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:main_put_start', 'message' => 'putting product archive to S3', 'data' => ['path' => $path, 'size_kb' => (int) round($file->getSize() / 1024)], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-            // #endregion
             $disk->put($path, file_get_contents($file->getRealPath()), 'public');
-            // #region agent log
-            file_put_contents($debugLog, json_encode(['sessionId' => '918ad3', 'location' => 'MCSetupsController.php:uploadProduct:main_put_done', 'message' => 'product archive on S3', 'data' => [], 'timestamp' => (int) round(microtime(true) * 1000)]) . "\n", LOCK_EX | FILE_APPEND);
-            // #endregion
             $disk->put('mcsetups-addons/products/' . $base . '.json', json_encode($meta, JSON_PRETTY_PRINT), 'public');
 
             Cache::forget('mcsetups:list_products');

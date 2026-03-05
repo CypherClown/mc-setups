@@ -47,6 +47,7 @@
                             required
                         >
                     </div>
+                    {{-- S3 Storage (for upload add-ons) - commented out so it does not show on frontend
                     <hr>
                     <h4>S3 Storage (for upload add-ons)</h4>
                     <p class="text-muted">Configure S3/MinIO to upload and store your own add-ons. Leave blank to skip.</p>
@@ -108,6 +109,7 @@
                             placeholder="us-east-1 (optional for MinIO)"
                         >
                     </div>
+                    --}}
                     <div class="form-group">
                         <button type="submit" class="btn btn-primary">
                             <i class="fa fa-save"></i> {{ $license ? 'Update License' : 'Save License' }}
@@ -189,6 +191,7 @@
     color: #7eb8ff;
 }
 </style>
+{{-- Uploads: Setups & Add-ons - commented out so it does not show on frontend
 <div class="row">
     <div class="col-xs-12">
         <div class="box mcsetups-upload-box">
@@ -227,6 +230,7 @@
         </div>
     </div>
 </div>
+--}}
 
 {{-- Add Product/Addon Modal (unified, dark styling) --}}
 <style>
@@ -657,6 +661,7 @@
         var clientAddonsUrl = '{{ route("admin.mcsetups.api.client.addons") }}';
         var mcsetupsLicenseKey = @json($license && $license->license_key ? $license->license_key : '');
         var useClientUploadApi = !!(mcsetupsLicenseKey && storeBaseUrl);
+        var useClientUploadApiForUpload = false;
         var csrf = '{{ csrf_token() }}';
         var modalMode = 'product';
 
@@ -725,6 +730,11 @@
                     if (useClientUploadApi && Array.isArray(products)) {
                         products = products.filter(function(f) { return f.is_client_upload === true; });
                     }
+                    products = products.filter(function(p) {
+                        var path = p.path || p.file_path || p.object_key || p.key || '';
+                        var idVal = p.id != null ? p.id : (p.file_id != null ? p.file_id : (p.product_id != null ? p.product_id : (p.fileId != null ? p.fileId : (p.productId != null ? p.productId : (p._id != null ? p._id : null)))));
+                        return !!(path || idVal != null);
+                    });
                     var badge = document.getElementById('products-count-badge');
                     if (badge) badge.textContent = products.length;
                     if (products.length === 0) {
@@ -748,8 +758,7 @@
                                 var idRaw = data.id != null ? data.id : (data.file_id != null ? data.file_id : (data.product_id != null ? data.product_id : (data.fileId != null ? data.fileId : (data.productId != null ? data.productId : (data._id != null ? data._id : null)))));
                                 var id = idRaw != null ? String(idRaw).replace(/^client-/, '') : null;
                                 if (!path && !id) {
-                                    alert('Cannot delete: product has no path or id. The store may use a different field name. Check console for product data.');
-                                    console.warn('Product data for delete:', data);
+                                    alert('Cannot delete: product has no path or id.');
                                     return;
                                 }
                                 if (!confirm('Delete this product? This cannot be undone.')) return;
@@ -848,6 +857,11 @@
                     var addons = useClientUploadApi
                         ? ((data.data && data.data.addons) || (data.data && data.data.files) || [])
                         : (data.data && data.data.addons) || [];
+                    addons = addons.filter(function(a) {
+                        var path = a.path || a.file_path || a.object_key || a.key || '';
+                        var idVal = a.id != null ? a.id : (a.file_id != null ? a.file_id : (a.addon_id != null ? a.addon_id : (a.fileId != null ? a.fileId : (a.addonId != null ? a.addonId : (a._id != null ? a._id : null)))));
+                        return !!(path || idVal != null);
+                    });
                     var badge = document.getElementById('addons-count-badge');
                     if (badge) badge.textContent = addons.length;
                     if (addons.length === 0) {
@@ -871,8 +885,7 @@
                                 var idRaw = data.id != null ? data.id : (data.file_id != null ? data.file_id : (data.addon_id != null ? data.addon_id : (data.fileId != null ? data.fileId : (data.addonId != null ? data.addonId : (data._id != null ? data._id : null)))));
                                 var id = idRaw != null ? String(idRaw).replace(/^client-/, '') : null;
                                 if (!path && !id) {
-                                    alert('Cannot delete: add-on has no path or id. Check console for addon data.');
-                                    console.warn('Addon data for delete:', data);
+                                    alert('Cannot delete: add-on has no path or id.');
                                     return;
                                 }
                                 if (!confirm('Delete this add-on? This cannot be undone.')) return;
@@ -1656,7 +1669,7 @@
 
                 var fd = new FormData();
                 var url;
-                if (useClientUploadApi) {
+                if (useClientUploadApiForUpload) {
                     url = modalMode === 'product' ? clientProductsUrl : clientAddonsUrl;
                     fd.append('display_name', displayName);
                     fd.append('placeholders', JSON.stringify(placeholders));
@@ -1674,7 +1687,7 @@
                         alert('Please select an archive file.');
                         return;
                     }
-                    var fileFieldName = useClientUploadApi ? 'file' : 'product_file';
+                    var fileFieldName = useClientUploadApiForUpload ? 'file' : 'product_file';
                     fd.append(fileFieldName, fileInput.files[0]);
                     fd.append('description', document.getElementById('add-product-description').value.trim());
                     var requiredIds = [];
@@ -1694,7 +1707,7 @@
                         alert('Please select a file.');
                         return;
                     }
-                    var fileFieldName = useClientUploadApi ? 'file' : 'addon_file';
+                    var fileFieldName = useClientUploadApiForUpload ? 'file' : 'addon_file';
                     fd.append(fileFieldName, addonFileInput.files[0]);
                     fd.append('file_type', document.getElementById('add-addon-file-type').value.trim());
                     fd.append('file_location', document.getElementById('add-addon-file-location').value.trim());
@@ -1717,25 +1730,20 @@
                     var coverInput = document.getElementById('add-product-cover-image');
                     if (coverInput.files && coverInput.files[0]) fd.append('cover_image', coverInput.files[0]);
                 }
-                if (!useClientUploadApi && modalMode === 'addon') {
+                if (!useClientUploadApiForUpload && modalMode === 'addon') {
                     fd.append('category', document.getElementById('add-product-category').value.trim());
                     fd.append('author_name', document.getElementById('add-product-author-name').value.trim());
                 }
 
                 if (!url) url = modalMode === 'product' ? uploadProductUrl : uploadAddonUrl;
                 var fileForLog = modalMode === 'product' ? (fileInput && fileInput.files && fileInput.files[0]) : (addonFileInput && addonFileInput.files && addonFileInput.files[0]);
-                // #region agent log
-                if (fileForLog) {
-                    fetch('http://localhost:7448/ingest/17a7d3e0-487b-46ba-9a76-1144235d3a72',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'918ad3'},body:JSON.stringify({sessionId:'918ad3',location:'index.blade.php:add-product-submit',message:'upload submit',data:{mode:modalMode,name:fileForLog.name,size_kb:Math.round(fileForLog.size/1024),url:url},timestamp:Date.now()})}).catch(function(){});
-                }
-                // #endregion
                 addProductSubmit.disabled = true;
                 var uploadTimeout = 300000;
                 var uploadAbort = new AbortController();
                 var uploadTimer = setTimeout(function() { uploadAbort.abort(); }, uploadTimeout);
                 var headers = { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': csrf };
-                if (useClientUploadApi && mcsetupsLicenseKey) headers['X-License-Key'] = mcsetupsLicenseKey;
-                var isClientProduct = useClientUploadApi && modalMode === 'product';
+                if (useClientUploadApiForUpload && mcsetupsLicenseKey) headers['X-License-Key'] = mcsetupsLicenseKey;
+                var isClientProduct = useClientUploadApiForUpload && modalMode === 'product';
                 fetch(url, {
                     method: 'POST',
                     body: fd,
